@@ -244,80 +244,19 @@ type ActivityLog struct {
 
 func parseAppName(title string) string {
 	title = strings.TrimSpace(title)
-	if title == "" || title == "Idle" || title == "System" {
-		return title
+	if title == "" {
+		return "System"
 	}
 
-	// Normalize browser names
-	var browserName string
-	var tabTitle string
-	lowerTitle := strings.ToLower(title)
+	// The platform-specific GetActiveWindowTitle() functions now handle
+	// process detection and app name resolution. This function just does
+	// basic sanitization and length capping.
 
-	if strings.Contains(lowerTitle, "google chrome") || strings.Contains(lowerTitle, "chrome") {
-		browserName = "Chrome"
-	} else if strings.Contains(lowerTitle, "firefox") {
-		browserName = "Firefox"
-	} else if strings.Contains(lowerTitle, "edge") {
-		browserName = "Edge"
-	} else if strings.Contains(lowerTitle, "safari") {
-		browserName = "Safari"
-	} else if strings.Contains(lowerTitle, "opera") {
-		browserName = "Opera"
-	} else if strings.Contains(lowerTitle, "brave") {
-		browserName = "Brave"
+	// Cap total length to prevent excessively long entries
+	if len(title) > 120 {
+		title = title[:120] + "..."
 	}
 
-	if browserName != "" {
-		// Clean the tab title by removing browser suffixes
-		tabTitle = title
-		suffixes := []string{
-			" - Google Chrome", " Google Chrome", " - Chrome", " Chrome",
-			" - Mozilla Firefox", " Mozilla Firefox", " - Firefox", " Firefox",
-			" - Microsoft Edge", " Microsoft Edge", " - Edge", " Edge",
-			" - Brave", " Brave", " - Safari", " Safari", " - Opera", " Opera",
-		}
-		for _, suffix := range suffixes {
-			if strings.HasSuffix(strings.ToLower(tabTitle), strings.ToLower(suffix)) {
-				tabTitle = tabTitle[:len(tabTitle)-len(suffix)]
-				break
-			}
-		}
-		tabTitle = strings.TrimSpace(tabTitle)
-		if tabTitle == "" || strings.EqualFold(tabTitle, browserName) {
-			return browserName
-		}
-		if len(tabTitle) > 40 {
-			tabTitle = tabTitle[:40] + "..."
-		}
-		return fmt.Sprintf("%s (%s)", browserName, tabTitle)
-	}
-
-	// For non-browser apps, try to extract app name using splitters
-	parts := strings.Split(title, " - ")
-	if len(parts) > 1 {
-		app := strings.TrimSpace(parts[len(parts)-1])
-		if app != "" {
-			if len(app) > 60 {
-				return app[:60]
-			}
-			return app
-		}
-	}
-
-	parts = strings.Split(title, " | ")
-	if len(parts) > 1 {
-		app := strings.TrimSpace(parts[len(parts)-1])
-		if app != "" {
-			if len(app) > 60 {
-				return app[:60]
-			}
-			return app
-		}
-	}
-
-	if len(title) > 60 {
-		return title[:60]
-	}
 	return title
 }
 
