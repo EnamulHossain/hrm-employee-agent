@@ -6,14 +6,19 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 )
+
+const agentVersion = "2.0.0"
 
 // htmlPage is the HTML content for the registration setup screen.
 const htmlPage = `<!DOCTYPE html>
@@ -350,6 +355,119 @@ func openBrowser(url string) {
 	}
 }
 
+// ──────────────────────────────────────────────────────────────────────────────
+// Single Instance Lock
+// ──────────────────────────────────────────────────────────────────────────────
+
+// acquireLock creates a PID file to prevent multiple instances.
+// Returns true if the lock was acquired, false if another instance is running.
+func acquireLock() bool {
+	pidPath, err := getPIDFilePath()
+	if err != nil {
+		log.Printf("[WARNING] Could not determine PID file path: %v", err)
+		return true // Proceed anyway
+	}
+
+	// Check if PID file exists and if the process is still running
+	data, err := os.ReadFile(pidPath)
+	if err == nil {
+		pidStr := strings.TrimSpace(string(data))
+		if pid, err := strconv.Atoi(pidStr); err == nil {
+			if isProcessRunning(pid) {
+				log.Printf("[WARNING] Another instance is already running (PID %d). Exiting.", pid)
+				return false
+			}
+		}
+		// Stale PID file, remove it
+		_ = os.Remove(pidPath)
+	}
+
+	// Write our PID
+	pid := os.Getpid()
+	if err := os.WriteFile(pidPath, []byte(strconv.Itoa(pid)), 0644); err != nil {
+		log.Printf("[WARNING] Could not create PID file: %v", err)
+	}
+
+	return true
+}
+
+// releaseLock removes the PID file.
+func releaseLock() {
+	pidPath, err := getPIDFilePath()
+	if err != nil {
+		return
+	}
+	_ = os.Remove(pidPath)
+}
+
+func getPIDFilePath() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	dir := filepath.Join(home, ".employee-agent")
+	_ = os.MkdirAll(dir, 0755)
+	return filepath.Join(dir, "agent.pid"), nil
+}
+
+// isProcessRunning checks if a process with the given PID is running.
+func isProcessRunning(pid int) bool {
+	process, err := os.FindProcess(pid)
+	if err != nil {
+		return false
+	}
+	// On Unix, FindProcess always succeeds. We need to send signal 0 to check.
+	if runtime.GOOS != "windows" {
+		err = process.Signal(os.Signal(nil))
+		// Use a platform-agnostic approach: try to find the process
+		if err != nil {
+			return false
+		}
+		return true
+	}
+	// On Windows, FindProcess succeeds only if the process exists
+	process.Release()
+	return true
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Network Readiness
+// ──────────────────────────────────────────────────────────────────────────────
+
+// waitForNetwork waits until network connectivity is available, with a timeout.
+// Returns true if network is available, false if timed out.
+func waitForNetwork(timeout time.Duration) bool {
+	deadline := time.Now().Add(timeout)
+	attempt := 0
+
+	for time.Now().Before(deadline) {
+		attempt++
+		conn, err := net.DialTimeout("tcp", "dns.google:443", 3*time.Second)
+		if err == nil {
+			conn.Close()
+			if attempt > 1 {
+				log.Printf("[INFO] Network ready after %d attempts.", attempt)
+			}
+			return true
+		}
+
+		// Also try a DNS resolution as fallback
+		_, err = net.LookupHost("google.com")
+		if err == nil {
+			if attempt > 1 {
+				log.Printf("[INFO] Network ready (DNS) after %d attempts.", attempt)
+			}
+			return true
+		}
+
+		log.Printf("[INFO] Waiting for network... (attempt %d)", attempt)
+		time.Sleep(3 * time.Second)
+	}
+
+	log.Println("[WARNING] Network readiness timed out. Proceeding anyway.")
+	return false
+}
+
 // startSetupServer starts the local web server on port 8089 to allow registration.
 func startSetupServer(config *Config) {
 	mux := http.NewServeMux()
@@ -390,8 +508,8 @@ func startSetupServer(config *Config) {
 				"device_uuid":      config.DeviceUUID,
 				"hostname":         getHostname(),
 				"operating_system": runtime.GOOS,
-				"ip_address":        GetLocalIP(),
-				"mac_address":       GetMACAddress(),
+				"ip_address":       GetLocalIP(),
+				"mac_address":      GetMACAddress(),
 			})
 
 			resp, err := http.Post(hrmUrl+"/api/agent/register", "application/json", bytes.NewBuffer(regReqBody))
@@ -459,6 +577,7 @@ func startSetupServer(config *Config) {
 	openBrowser("http://localhost:8089")
 	_ = server.ListenAndServe()
 }
+
 // autoRegister attempts to register the device in the background using stored credentials.
 // Returns (success, isNetworkError)
 func autoRegister(config *Config) (bool, bool) {
@@ -477,7 +596,8 @@ func autoRegister(config *Config) (bool, bool) {
 		"mac_address":      GetMACAddress(),
 	})
 
-	resp, err := http.Post(config.HRMURL+"/api/agent/register", "application/json", bytes.NewBuffer(regReqBody))
+	client := &http.Client{Timeout: 15 * time.Second}
+	resp, err := client.Post(config.HRMURL+"/api/agent/register", "application/json", bytes.NewBuffer(regReqBody))
 	if err != nil {
 		log.Printf("[ERROR] Auto-registration request failed: %v", err)
 		return false, true
@@ -710,7 +830,14 @@ func startDaemon(config *Config) {
 }
 
 func main() {
-	log.Println("[INFO] Starting Employee Desktop Agent...")
+	log.Printf("[INFO] Starting HRM Employee Desktop Agent v%s (%s/%s)...", agentVersion, runtime.GOOS, runtime.GOARCH)
+
+	// ── Single Instance Lock ──
+	if !acquireLock() {
+		log.Println("[INFO] Another instance is already running. Exiting gracefully.")
+		os.Exit(0)
+	}
+	defer releaseLock()
 
 	config, err := LoadConfig()
 	if err != nil {
@@ -725,6 +852,15 @@ func main() {
 	// Always ensure autostart is configured when agent runs
 	_ = ConfigureAutostart()
 
+	// ── Wait for network on startup (up to 60 seconds) ──
+	// This is critical after a reboot when the agent starts before network is ready.
+	log.Println("[INFO] Checking network connectivity...")
+	waitForNetwork(60 * time.Second)
+
+	// ── Main Loop with Exponential Backoff ──
+	retryDelay := 10 * time.Second
+	maxRetryDelay := 5 * time.Minute
+
 	for {
 		if !config.Registered {
 			// If we have saved credentials, try to automatically re-register in the background
@@ -737,18 +873,29 @@ func main() {
 
 			if !success {
 				if isNetErr {
-					log.Println("[WARNING] Auto-registration failed due to network error. Retrying silently in 30 seconds...")
-					time.Sleep(30 * time.Second)
+					log.Printf("[WARNING] Auto-registration failed due to network error. Retrying in %v...", retryDelay)
+					time.Sleep(retryDelay)
+					// Exponential backoff
+					retryDelay = retryDelay * 2
+					if retryDelay > maxRetryDelay {
+						retryDelay = maxRetryDelay
+					}
 					continue
 				}
 				log.Println("[INFO] Device unregistered or invalid credentials. Launching setup web interface...")
 				startSetupServer(&config)
+				// Reset retry delay after manual registration attempt
+				retryDelay = 10 * time.Second
+			} else {
+				// Reset retry delay on success
+				retryDelay = 10 * time.Second
 			}
 		} else {
 			log.Println("[INFO] Device registered. Starting daemon monitoring...")
 			startDaemon(&config)
+			// Reset retry delay when daemon exits normally
+			retryDelay = 10 * time.Second
 		}
 		time.Sleep(2 * time.Second)
 	}
 }
-

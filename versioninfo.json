@@ -1,0 +1,39 @@
+{
+  "FixedFileInfo": {
+    "FileVersion": {
+      "Major": 2,
+      "Minor": 0,
+      "Patch": 0,
+      "Build": 0
+    },
+    "ProductVersion": {
+      "Major": 2,
+      "Minor": 0,
+      "Patch": 0,
+      "Build": 0
+    },
+    "FileFlagsMask": "3f",
+    "FileFlags": "",
+    "FileOS": "040004",
+    "FileType": "01",
+    "FileSubType": "00"
+  },
+  "StringFileInfo": {
+    "Comments": "HRM Employee Desktop Agent - Background monitoring and heartbeat agent for corporate HRM systems.",
+    "CompanyName": "HRM System",
+    "FileDescription": "HRM Employee Desktop Agent",
+    "FileVersion": "2.0.0.0",
+    "InternalName": "employee-agent",
+    "LegalCopyright": "Copyright (c) HRM System. All rights reserved.",
+    "OriginalFilename": "employee-agent.exe",
+    "ProductName": "HRM Employee Desktop Agent",
+    "ProductVersion": "2.0.0.0"
+  },
+  "VarFileInfo": {
+    "Translation": {
+      "LangID": "0409",
+      "CharsetID": "04B0"
+    }
+  },
+  "ManifestFilename": "agent.manifest"
+}
